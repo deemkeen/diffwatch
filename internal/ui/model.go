@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,8 +18,8 @@ type Model struct {
 	stateManager *state.Manager
 	diffEngine   *diff.Engine
 
-	events      []string // Recent events log
-	currentDiff string   // Current diff to display
+	events      []string     // Recent events log
+	currentDiff *diff.Result // Current diff to display
 	width       int
 	height      int
 	err         error
@@ -120,6 +121,11 @@ func (m *Model) handleFileEvent(event watcher.Event) {
 		m.events = m.events[1:]
 	}
 
+	// Skip directories - we only track file changes for diffs
+	if info, err := os.Stat(event.Path); err == nil && info.IsDir() {
+		return
+	}
+
 	// Update state and compute diff
 	oldState, newState, err := m.stateManager.Update(event.Path)
 	if err != nil {
@@ -134,7 +140,7 @@ func (m *Model) handleFileEvent(event watcher.Event) {
 	}
 
 	if result.HasDiff {
-		m.currentDiff = result.Unified
+		m.currentDiff = result
 	}
 }
 
@@ -183,10 +189,10 @@ func (m *Model) View() string {
 		Padding(1).
 		Width(m.width - 4)
 
-	if m.currentDiff != "" {
-		// Colorize diff
-		coloredDiff := colorizeDiff(m.currentDiff)
-		b.WriteString(diffStyle.Render(coloredDiff))
+	if m.currentDiff != nil {
+		// Render modern diff view
+		renderedDiff := m.renderModernDiff(m.currentDiff)
+		b.WriteString(diffStyle.Render(renderedDiff))
 	} else {
 		b.WriteString(diffStyle.Render("No changes yet"))
 	}
@@ -210,7 +216,111 @@ func (m *Model) View() string {
 	return b.String()
 }
 
-// colorizeDiff adds color to diff output
+// renderModernDiff renders a diff in a modern, vimdiff-like style
+func (m *Model) renderModernDiff(result *diff.Result) string {
+	var b strings.Builder
+
+	// File header with status
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("14"))
+
+	statusStyle := lipgloss.NewStyle().
+		Bold(true)
+
+	// Handle binary files specially
+	if result.IsBinary {
+		binaryStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11")). // Yellow
+			Bold(true)
+
+		if result.IsNew {
+			statusStyle = statusStyle.Foreground(lipgloss.Color("10")) // Green
+			b.WriteString(headerStyle.Render("📦 ") + statusStyle.Render("[NEW BINARY FILE] ") + result.Path + "\n\n")
+		} else if result.IsDeleted {
+			statusStyle = statusStyle.Foreground(lipgloss.Color("9")) // Red
+			b.WriteString(headerStyle.Render("📦 ") + statusStyle.Render("[DELETED BINARY FILE] ") + result.Path + "\n\n")
+		} else {
+			statusStyle = statusStyle.Foreground(lipgloss.Color("11")) // Yellow
+			b.WriteString(headerStyle.Render("📦 ") + statusStyle.Render("[MODIFIED BINARY FILE] ") + result.Path + "\n\n")
+		}
+
+		b.WriteString(binaryStyle.Render("Binary file detected - diff content not shown"))
+		return b.String()
+	}
+
+	if result.IsNew {
+		statusStyle = statusStyle.Foreground(lipgloss.Color("10")) // Green
+		b.WriteString(headerStyle.Render("📄 ") + statusStyle.Render("[NEW FILE] ") + result.Path + "\n\n")
+	} else if result.IsDeleted {
+		statusStyle = statusStyle.Foreground(lipgloss.Color("9")) // Red
+		b.WriteString(headerStyle.Render("📄 ") + statusStyle.Render("[DELETED] ") + result.Path + "\n\n")
+	} else {
+		statusStyle = statusStyle.Foreground(lipgloss.Color("11")) // Yellow
+		b.WriteString(headerStyle.Render("📄 ") + statusStyle.Render("[MODIFIED] ") + result.Path + "\n\n")
+	}
+
+	// Styles for different line types
+	addedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("10")). // Bright green
+		Background(lipgloss.Color("22"))  // Dark green background
+
+	deletedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("9")). // Bright red
+		Background(lipgloss.Color("52")) // Dark red background
+
+	unchangedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("250")) // Light gray
+
+	lineNumStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Width(5).
+		Align(lipgloss.Right)
+
+	// Render lines
+	maxLines := 50 // Limit lines to prevent overflow
+	displayLines := result.Lines
+	if len(displayLines) > maxLines {
+		displayLines = displayLines[:maxLines]
+	}
+
+	for _, line := range displayLines {
+		var lineNumStr, iconStr, content string
+
+		switch line.Type {
+		case diff.LineAdded:
+			iconStr = "✓ "
+			lineNumStr = lineNumStyle.Render(fmt.Sprintf("%4d ", line.NewLineNum))
+			content = addedStyle.Render(iconStr + line.Content)
+
+		case diff.LineDeleted:
+			iconStr = "✗ "
+			lineNumStr = lineNumStyle.Render(fmt.Sprintf("%4d ", line.OldLineNum))
+			content = deletedStyle.Render(iconStr + line.Content)
+
+		case diff.LineUnchanged:
+			iconStr = "  "
+			lineNumStr = lineNumStyle.Render(fmt.Sprintf("%4d ", line.NewLineNum))
+			content = unchangedStyle.Render(iconStr + line.Content)
+
+		default:
+			continue
+		}
+
+		b.WriteString(lineNumStr + content + "\n")
+	}
+
+	if len(result.Lines) > maxLines {
+		moreStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Italic(true)
+		b.WriteString("\n" + moreStyle.Render(fmt.Sprintf("... %d more lines (truncated for display)", len(result.Lines)-maxLines)))
+	}
+
+	return b.String()
+}
+
+// colorizeDiff adds color to diff output (legacy, keeping for backward compatibility)
 func colorizeDiff(diff string) string {
 	lines := strings.Split(diff, "\n")
 	var colored []string
