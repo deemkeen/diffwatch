@@ -16,11 +16,20 @@ func main() {
 	var watchPath string
 	var recursive bool
 
-	flag.StringVar(&watchPath, "path", ".", "Path to watch for changes")
-	flag.StringVar(&watchPath, "p", ".", "Path to watch for changes (shorthand)")
+	flag.StringVar(&watchPath, "path", ".", "")
+	flag.StringVar(&watchPath, "p", ".", "")
 
-	flag.BoolVar(&recursive, "recursive", false, "Watch all subdirectories recursively")
-	flag.BoolVar(&recursive, "r", false, "Watch all subdirectories recursively (shorthand)")
+	flag.BoolVar(&recursive, "recursive", false, "")
+	flag.BoolVar(&recursive, "r", false, "")
+
+	// Custom usage function
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  -p, -path string\n")
+		fmt.Fprintf(os.Stderr, "    \tPath to watch for changes (default: current directory)\n")
+		fmt.Fprintf(os.Stderr, "  -r, -recursive\n")
+		fmt.Fprintf(os.Stderr, "    \tWatch all subdirectories recursively\n")
+	}
 
 	flag.Parse()
 
