@@ -42,6 +42,52 @@ var skipDirs = map[string]bool{
 	".vscode":       true,
 }
 
+// shouldSkipFile returns true if a file should be ignored
+func shouldSkipFile(path string) bool {
+	base := filepath.Base(path)
+
+	// Skip lock files
+	if filepath.Ext(base) == ".LOCK" || filepath.Ext(base) == ".lock" {
+		return true
+	}
+
+	// Skip shell history files
+	if base == ".zsh_history" || base == ".bash_history" ||
+		base == ".fish_history" || base == ".sh_history" {
+		return true
+	}
+
+	// Skip other common noisy dotfiles
+	if base == ".lesshst" || base == ".viminfo" || base == ".recently-used" ||
+		base == ".xsession-errors" || base == ".ICEauthority" {
+		return true
+	}
+
+	// Skip common temp file patterns
+	if len(base) > 0 && base[0] == '.' && (filepath.Ext(base) == ".swp" ||
+		filepath.Ext(base) == ".swo" ||
+		filepath.Ext(base) == ".tmp") {
+		return true
+	}
+
+	// Skip vim swap files
+	if len(base) > 0 && base[0] == '.' && len(base) > 4 && base[len(base)-4:] == ".swp" {
+		return true
+	}
+
+	// Skip emacs temp files
+	if len(base) > 0 && base[0] == '#' && base[len(base)-1] == '#' {
+		return true
+	}
+
+	// Skip tilde backup files
+	if len(base) > 0 && base[len(base)-1] == '~' {
+		return true
+	}
+
+	return false
+}
+
 // FileWatcher watches files for changes and emits debounced events
 type FileWatcher struct {
 	watcher     *fsnotify.Watcher
@@ -118,14 +164,15 @@ func (fw *FileWatcher) addRecursive(root string) error {
 		}
 
 		if info.IsDir() {
-			// Skip if already watched
-			if _, watched := fw.watchedDirs.Load(path); watched {
-				return filepath.SkipDir
-			}
-
 			// Skip common directories that shouldn't be watched
 			dirName := filepath.Base(path)
 			if skipDirs[dirName] {
+				return filepath.SkipDir
+			}
+
+			// Skip if already watched, but don't skip the root itself
+			// (we need to walk into root's subdirectories)
+			if _, watched := fw.watchedDirs.Load(path); watched && path != root {
 				return filepath.SkipDir
 			}
 
@@ -150,6 +197,20 @@ func (fw *FileWatcher) Events() <-chan Event {
 // Errors returns the channel of errors
 func (fw *FileWatcher) Errors() <-chan error {
 	return fw.errors
+}
+
+// WatchPath returns the absolute path being watched
+func (fw *FileWatcher) WatchPath() string {
+	fw.mu.RLock()
+	defer fw.mu.RUnlock()
+	return fw.watchPath
+}
+
+// IsRecursive returns whether the watcher is in recursive mode
+func (fw *FileWatcher) IsRecursive() bool {
+	fw.mu.RLock()
+	defer fw.mu.RUnlock()
+	return fw.recursive
 }
 
 // Close stops the watcher and releases resources
@@ -189,6 +250,11 @@ func (fw *FileWatcher) watch() {
 
 // handleEvent processes a raw fsnotify event
 func (fw *FileWatcher) handleEvent(event fsnotify.Event) {
+	// Skip filtered files early
+	if shouldSkipFile(event.Name) {
+		return
+	}
+
 	op := opToString(event.Op)
 
 	// If recursive mode and a directory was created, add it to the watcher

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -18,16 +19,27 @@ type Model struct {
 	stateManager *state.Manager
 	diffEngine   *diff.Engine
 
-	events      []string     // Recent events log
-	currentDiff *diff.Result // Current diff to display
-	width       int
-	height      int
-	err         error
-	quitting    bool
+	events         []string     // Recent events log
+	currentDiff    *diff.Result // Current diff to display
+	width          int
+	height         int
+	err            error
+	quitting       bool
+	lastRenderTime time.Time              // Track last render for throttling
+	pendingEvents  map[string]eventUpdate // Coalesce rapid events for same file
+}
+
+// eventUpdate tracks the most recent event for a file
+type eventUpdate struct {
+	event     watcher.Event
+	timestamp time.Time
 }
 
 // fileEventMsg wraps a file event for the tea runtime
 type fileEventMsg watcher.Event
+
+// processCoalescedMsg triggers processing of coalesced events
+type processCoalescedMsg struct{}
 
 // errMsg wraps an error for the tea runtime
 type errMsg error
@@ -35,12 +47,13 @@ type errMsg error
 // New creates a new UI model
 func New(fw *watcher.FileWatcher) *Model {
 	return &Model{
-		watcher:      fw,
-		stateManager: state.New(),
-		diffEngine:   diff.New(),
-		events:       make([]string, 0),
-		width:        80,
-		height:       24,
+		watcher:       fw,
+		stateManager:  state.New(),
+		diffEngine:    diff.New(),
+		events:        make([]string, 0),
+		pendingEvents: make(map[string]eventUpdate),
+		width:         80,
+		height:        24,
 	}
 }
 
@@ -81,7 +94,10 @@ func (m *Model) listenForEvents(p *tea.Program) {
 
 // Init initializes the model
 func (m *Model) Init() tea.Cmd {
-	return nil
+	// Start a ticker to process coalesced events periodically
+	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
+		return processCoalescedMsg{}
+	})
 }
 
 // Update handles messages and updates the model
@@ -99,7 +115,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case fileEventMsg:
-		m.handleFileEvent(watcher.Event(msg))
+		// Coalesce events - store only the latest event for each file
+		event := watcher.Event(msg)
+		m.pendingEvents[event.Path] = eventUpdate{
+			event:     event,
+			timestamp: time.Now(),
+		}
+		// Don't process immediately - wait for coalescing ticker
+		return m, nil
+
+	case processCoalescedMsg:
+		// Process all pending events that haven't been updated in a while
+		now := time.Now()
+		processThreshold := 200 * time.Millisecond
+
+		for path, update := range m.pendingEvents {
+			if now.Sub(update.timestamp) >= processThreshold {
+				m.handleFileEvent(update.event)
+				delete(m.pendingEvents, path)
+			}
+		}
+
+		// Schedule next coalescing tick
+		return m, tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
+			return processCoalescedMsg{}
+		})
 
 	case errMsg:
 		m.err = msg
@@ -110,20 +150,86 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleFileEvent processes a file event and updates the diff
 func (m *Model) handleFileEvent(event watcher.Event) {
-	// Add to event log
-	eventStr := fmt.Sprintf("[%s] %s: %s",
-		event.Timestamp.Format("15:04:05"),
-		event.Op,
-		event.Path)
-
-	m.events = append(m.events, eventStr)
-	if len(m.events) > 10 {
-		m.events = m.events[1:]
+	// Throttle event log updates - don't add same file multiple times in quick succession
+	shouldAddToLog := true
+	if len(m.events) > 0 {
+		// Check if last event was for the same file within last second
+		lastEvent := m.events[len(m.events)-1]
+		if strings.Contains(lastEvent, event.Path) {
+			timeSinceLastRender := time.Since(m.lastRenderTime)
+			if timeSinceLastRender < 500*time.Millisecond {
+				shouldAddToLog = false
+			}
+		}
 	}
 
-	// Skip directories - we only track file changes for diffs
-	if info, err := os.Stat(event.Path); err == nil && info.IsDir() {
+	if shouldAddToLog {
+		// Add to event log
+		eventStr := fmt.Sprintf("[%s] %s: %s",
+			event.Timestamp.Format("15:04:05"),
+			event.Op,
+			event.Path)
+
+		m.events = append(m.events, eventStr)
+		if len(m.events) > 10 {
+			m.events = m.events[1:]
+		}
+		m.lastRenderTime = time.Now()
+	}
+
+	// For remove events, we can't stat the file (it's gone)
+	// but we can still process it to show deletion diff
+	if event.Op == "remove" {
+		// Update state and compute deletion diff
+		oldState, newState, err := m.stateManager.Update(event.Path)
+		if err != nil {
+			m.err = err
+			return
+		}
+
+		result, err := m.diffEngine.Compute(oldState, newState)
+		if err != nil {
+			m.err = err
+			return
+		}
+
+		if result.HasDiff {
+			m.currentDiff = result
+		}
 		return
+	}
+
+	// For non-remove events, stat the file to get info
+	info, err := os.Stat(event.Path)
+	if err != nil {
+		// File might have been deleted or is inaccessible
+		if os.IsNotExist(err) {
+			m.err = fmt.Errorf("file not found: %s", event.Path)
+		}
+		return
+	}
+
+	if info.IsDir() {
+		return
+	}
+
+	// Skip files larger than 1MB for diff computation
+	const maxDiffSize = 1 * 1024 * 1024 // 1MB
+	if info.Size() > maxDiffSize {
+		m.currentDiff = &diff.Result{
+			Path:     event.Path,
+			HasDiff:  true,
+			IsBinary: false,
+			Lines:    []diff.DiffLine{},
+		}
+		m.err = fmt.Errorf("file too large for diff (%d bytes, max %d bytes)",
+			info.Size(), maxDiffSize)
+		return
+	}
+
+	// Clear any previous "file too large" errors
+	if m.err != nil && strings.Contains(m.err.Error(), "file too large") {
+		m.err = nil
 	}
 
 	// Update state and compute diff
@@ -160,7 +266,19 @@ func (m *Model) View() string {
 		BorderBottom(true).
 		Width(m.width)
 
-	b.WriteString(headerStyle.Render("DiffWatch - Real-time File Diff Viewer"))
+	watchPathStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("243")).
+		Italic(true)
+
+	recursiveMode := "non-recursively"
+	if m.watcher.IsRecursive() {
+		recursiveMode = "recursively"
+	}
+
+	headerText := "DiffWatch - Real-time File Diff Viewer\n" +
+		watchPathStyle.Render(fmt.Sprintf("Watching: %s (%s)", m.watcher.WatchPath(), recursiveMode))
+
+	b.WriteString(headerStyle.Render(headerText))
 	b.WriteString("\n\n")
 
 	// Event log
@@ -197,13 +315,16 @@ func (m *Model) View() string {
 		b.WriteString(diffStyle.Render("No changes yet"))
 	}
 
-	// Error display
+	// Error display (but don't show "file too large" as error - it's already shown in diff)
 	if m.err != nil {
-		b.WriteString("\n")
-		errorStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")).
-			Bold(true)
-		b.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+		errMsg := m.err.Error()
+		if !strings.Contains(errMsg, "file too large") {
+			b.WriteString("\n")
+			errorStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("196")).
+				Bold(true)
+			b.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+		}
 	}
 
 	// Footer
@@ -246,6 +367,23 @@ func (m *Model) renderModernDiff(result *diff.Result) string {
 		}
 
 		b.WriteString(binaryStyle.Render("Binary file detected - diff content not shown"))
+		return b.String()
+	}
+
+	// Handle files with no lines (e.g., too large files)
+	if len(result.Lines) == 0 && result.HasDiff {
+		largeFileStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11")). // Yellow
+			Bold(true)
+
+		statusStyle = statusStyle.Foreground(lipgloss.Color("11")) // Yellow
+		b.WriteString(headerStyle.Render("📄 ") + statusStyle.Render("[FILE TOO LARGE] ") + result.Path + "\n\n")
+
+		if m.err != nil && strings.Contains(m.err.Error(), "file too large") {
+			b.WriteString(largeFileStyle.Render(m.err.Error()))
+		} else {
+			b.WriteString(largeFileStyle.Render("File is too large to display diff (max 1MB)"))
+		}
 		return b.String()
 	}
 
