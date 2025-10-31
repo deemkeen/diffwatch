@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hv11297/diffwatch/internal/state"
+	"github.com/deemkeen/diffwatch/internal/state"
 	"github.com/pmezard/go-difflib/difflib"
 )
 

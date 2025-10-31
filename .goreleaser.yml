@@ -1,0 +1,153 @@
+# GoReleaser configuration for diffwatch
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+
+builds:
+  - id: diffwatch
+    binary: diffwatch
+    main: ./cmd/diffwatch
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: diffwatch-archive
+    format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE*
+      - CHANGELOG*
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: 'Performance improvements'
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: deemkeen
+    name: diffwatch
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## DiffWatch {{ .Tag }} ({{ .Date }})
+
+    Real-time CLI tool for watching file changes and visualizing diffs in your terminal.
+
+    ### Installation
+
+    #### Homebrew (macOS/Linux)
+    ```bash
+    brew install deemkeen/tap/diffwatch
+    ```
+
+    #### Go Install
+    ```bash
+    go install github.com/deemkeen/diffwatch/cmd/diffwatch@{{ .Tag }}
+    ```
+
+    #### Download Binary
+    Download the pre-built binary for your platform from the assets below.
+
+  footer: |
+    ---
+
+    **Full Changelog**: https://github.com/deemkeen/diffwatch/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    ## What's Changed
+  name_template: "v{{.Version}}"
+
+# Homebrew tap configuration
+brews:
+  - name: diffwatch
+    repository:
+      owner: deemkeen
+      name: homebrew-tap
+      branch: main
+    homepage: https://github.com/deemkeen/diffwatch
+    description: Real-time CLI tool for watching file changes and visualizing diffs
+    license: MIT
+    skip_upload: auto
+    install: |
+      bin.install "diffwatch"
+    test: |
+      system "#{bin}/diffwatch", "-h"
+
+# Docker images (optional - can enable later)
+# dockers:
+#   - image_templates:
+#       - "deemkeen/diffwatch:{{ .Tag }}"
+#       - "deemkeen/diffwatch:latest"
+#     dockerfile: Dockerfile
+#     build_flag_templates:
+#       - "--pull"
+#       - "--label=org.opencontainers.image.created={{.Date}}"
+#       - "--label=org.opencontainers.image.title={{.ProjectName}}"
+#       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+#       - "--label=org.opencontainers.image.version={{.Version}}"
+
+# Announce (optional - can configure later)
+# announce:
+#   twitter:
+#     enabled: false

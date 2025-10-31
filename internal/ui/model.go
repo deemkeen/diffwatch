@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hv11297/diffwatch/internal/diff"
-	"github.com/hv11297/diffwatch/internal/state"
-	"github.com/hv11297/diffwatch/internal/watcher"
+	"github.com/deemkeen/diffwatch/internal/diff"
+	"github.com/deemkeen/diffwatch/internal/state"
+	"github.com/deemkeen/diffwatch/internal/watcher"
 )
 
 // Model represents the UI state

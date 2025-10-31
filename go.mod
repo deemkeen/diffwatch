@@ -1,4 +1,4 @@
-module github.com/hv11297/diffwatch
+module github.com/deemkeen/diffwatch
 
 go 1.25.3
 

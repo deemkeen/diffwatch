@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/hv11297/diffwatch/internal/ui"
-	"github.com/hv11297/diffwatch/internal/watcher"
+	"github.com/deemkeen/diffwatch/internal/ui"
+	"github.com/deemkeen/diffwatch/internal/watcher"
 )
 
 func main() {
