@@ -13,18 +13,25 @@ import (
 
 func main() {
 	// Parse command line arguments
-	watchPath := flag.String("path", ".", "Path to watch for changes")
-	recursive := flag.Bool("recursive", false, "Watch all subdirectories recursively")
+	var watchPath string
+	var recursive bool
+
+	flag.StringVar(&watchPath, "path", ".", "Path to watch for changes")
+	flag.StringVar(&watchPath, "p", ".", "Path to watch for changes (shorthand)")
+
+	flag.BoolVar(&recursive, "recursive", false, "Watch all subdirectories recursively")
+	flag.BoolVar(&recursive, "r", false, "Watch all subdirectories recursively (shorthand)")
+
 	flag.Parse()
 
 	// Validate path
-	if _, err := os.Stat(*watchPath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Error: path does not exist: %s\n", *watchPath)
+	if _, err := os.Stat(watchPath); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error: path does not exist: %s\n", watchPath)
 		os.Exit(1)
 	}
 
 	// Create file watcher
-	fw, err := watcher.New(*watchPath, *recursive)
+	fw, err := watcher.New(watchPath, recursive)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating watcher: %v\n", err)
 		os.Exit(1)

@@ -36,18 +36,23 @@ diffwatch
 
 Watch a specific directory:
 ```bash
+diffwatch -p /path/to/directory
+# or
 diffwatch -path /path/to/directory
 ```
 
 Watch all subdirectories recursively:
 ```bash
+diffwatch -p /path/to/directory -r
+# or
 diffwatch -path /path/to/directory -recursive
 ```
 
 ## Options
 
-- `-path string` - Path to watch for changes (default: current directory)
-- `-recursive` - Watch all subdirectories recursively (default: false)
+- `-p`, `-path` - Path to watch for changes (default: current directory)
+- `-r`, `-recursive` - Watch all subdirectories recursively (default: false)
+- `-h` - Show help
 
 ## Controls
 

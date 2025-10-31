@@ -69,24 +69,24 @@ diffwatch/
 
 ## Development Phases
 
-### Phase 1: MVP (Current)
+### Phase 1: MVP ✅ Complete
 - [x] Project setup and structure
-- [ ] Basic file watcher (single directory)
-- [ ] Simple debouncer (100ms window)
-- [ ] In-memory state management
-- [ ] Basic diff computation (unified format)
-- [ ] Simple TUI (file list + diff view)
-- [ ] CLI args: watch path
+- [x] Basic file watcher (single directory)
+- [x] Simple debouncer (100ms window)
+- [x] In-memory state management
+- [x] Basic diff computation (unified format)
+- [x] Simple TUI (file list + diff view)
+- [x] CLI args: watch path
 
 **Goal**: Watch a directory, show live diffs when files change
 
-### Phase 2: Core Features
-- [ ] Recursive directory watching
+### Phase 2: Core Features (In Progress)
+- [x] Recursive directory watching
 - [ ] Ignore patterns (.gitignore style)
 - [ ] Multiple diff formats (unified, split, inline)
 - [ ] File filtering by extension
 - [ ] Syntax highlighting
-- [ ] Better error handling
+- [x] Better error handling (permission errors)
 
 ### Phase 3: Performance & Reliability
 - [ ] Large file handling (streaming, chunked reads)
@@ -95,12 +95,12 @@ diffwatch/
 - [ ] Stress testing (1000+ files)
 - [ ] Graceful degradation
 
-### Phase 4: Advanced Features
+### Phase 4: Advanced Features (In Progress)
 - [ ] Configuration file support
 - [ ] Export diffs (to file, clipboard)
 - [ ] Search/filter in diffs
 - [ ] History navigation
-- [ ] Binary file detection
+- [x] Binary file detection
 - [ ] Symlink handling
 
 ### Phase 5: Polish
