@@ -171,7 +171,7 @@ func (m *Model) handleFileEvent(event watcher.Event) {
 			event.Path)
 
 		m.events = append(m.events, eventStr)
-		if len(m.events) > 10 {
+		if len(m.events) > 5 {
 			m.events = m.events[1:]
 		}
 		m.lastRenderTime = time.Now()
@@ -308,8 +308,15 @@ func (m *Model) View() string {
 		Width(m.width - 4)
 
 	if m.currentDiff != nil {
-		// Render modern diff view
-		renderedDiff := m.renderModernDiff(m.currentDiff)
+		// Calculate available height for diff (leaving room for header, events, footer, borders)
+		// Header: 4 lines, Events: ~7 lines (title + 5 events), Footer: 1 line, margins/borders: ~6 lines
+		availableHeight := m.height - 18
+		if availableHeight < 10 {
+			availableHeight = 10 // Minimum height
+		}
+
+		// Render modern diff view with height constraint
+		renderedDiff := m.renderModernDiff(m.currentDiff, availableHeight)
 		b.WriteString(diffStyle.Render(renderedDiff))
 	} else {
 		b.WriteString(diffStyle.Render("No changes yet"))
@@ -337,8 +344,89 @@ func (m *Model) View() string {
 	return b.String()
 }
 
+// selectLinesToDisplay intelligently selects which lines to show from a diff,
+// centering on actual changes when the diff is too large
+func (m *Model) selectLinesToDisplay(lines []diff.DiffLine, maxLines int) ([]diff.DiffLine, int, int) {
+	if len(lines) <= maxLines {
+		return lines, 0, 0
+	}
+
+	// Find all changed lines (additions and deletions)
+	changeIndices := make([]int, 0)
+	for i, line := range lines {
+		if line.Type == diff.LineAdded || line.Type == diff.LineDeleted {
+			changeIndices = append(changeIndices, i)
+		}
+	}
+
+	// If no changes found (shouldn't happen), just return first maxLines
+	if len(changeIndices) == 0 {
+		return lines[:maxLines], 0, len(lines) - maxLines
+	}
+
+	// Find the range that contains the changes
+	firstChange := changeIndices[0]
+	lastChange := changeIndices[len(changeIndices)-1]
+
+	// Calculate context lines to show (3 lines of context before/after changes)
+	contextLines := 3
+	startIdx := firstChange - contextLines
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	endIdx := lastChange + contextLines + 1
+	if endIdx > len(lines) {
+		endIdx = len(lines)
+	}
+
+	selectedLines := lines[startIdx:endIdx]
+
+	// If still too many lines, trim from the edges while keeping changes centered
+	if len(selectedLines) > maxLines {
+		// Calculate relative positions of first and last change in selectedLines
+		relFirstChange := firstChange - startIdx
+		relLastChange := lastChange - startIdx
+
+		// Prioritize showing all changes, then context
+		changeSpan := relLastChange - relFirstChange + 1
+
+		if changeSpan >= maxLines {
+			// Changes alone exceed maxLines, just show the changes
+			selectedLines = selectedLines[relFirstChange : relFirstChange+maxLines]
+			return selectedLines, firstChange, len(lines) - (firstChange + maxLines)
+		}
+
+		// We can show all changes plus some context
+		remainingLines := maxLines - changeSpan
+		beforeLines := remainingLines / 2
+		afterLines := remainingLines - beforeLines
+
+		newStart := relFirstChange - beforeLines
+		if newStart < 0 {
+			afterLines += -newStart // Shift extra to after
+			newStart = 0
+		}
+
+		newEnd := relLastChange + 1 + afterLines
+		if newEnd > len(selectedLines) {
+			beforeExtra := newEnd - len(selectedLines)
+			newStart -= beforeExtra // Shift extra to before
+			if newStart < 0 {
+				newStart = 0
+			}
+			newEnd = len(selectedLines)
+		}
+
+		selectedLines = selectedLines[newStart:newEnd]
+		return selectedLines, startIdx + newStart, len(lines) - (startIdx + newEnd)
+	}
+
+	return selectedLines, startIdx, len(lines) - endIdx
+}
+
 // renderModernDiff renders a diff in a modern, vimdiff-like style
-func (m *Model) renderModernDiff(result *diff.Result) string {
+func (m *Model) renderModernDiff(result *diff.Result, maxDisplayLines int) string {
 	var b strings.Builder
 
 	// File header with status
@@ -415,12 +503,8 @@ func (m *Model) renderModernDiff(result *diff.Result) string {
 		Width(5).
 		Align(lipgloss.Right)
 
-	// Render lines
-	maxLines := 50 // Limit lines to prevent overflow
-	displayLines := result.Lines
-	if len(displayLines) > maxLines {
-		displayLines = displayLines[:maxLines]
-	}
+	// Render lines with smart selection: center on changes
+	displayLines, truncatedBefore, truncatedAfter := m.selectLinesToDisplay(result.Lines, maxDisplayLines)
 
 	for _, line := range displayLines {
 		var lineNumStr, iconStr, content string
@@ -448,11 +532,18 @@ func (m *Model) renderModernDiff(result *diff.Result) string {
 		b.WriteString(lineNumStr + content + "\n")
 	}
 
-	if len(result.Lines) > maxLines {
-		moreStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
-			Italic(true)
-		b.WriteString("\n" + moreStyle.Render(fmt.Sprintf("... %d more lines (truncated for display)", len(result.Lines)-maxLines)))
+	// Show truncation info
+	moreStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true)
+
+	if truncatedBefore > 0 && truncatedAfter > 0 {
+		b.WriteString("\n" + moreStyle.Render(fmt.Sprintf("... %d lines hidden before, %d lines hidden after (centered on changes)",
+			truncatedBefore, truncatedAfter)))
+	} else if truncatedBefore > 0 {
+		b.WriteString("\n" + moreStyle.Render(fmt.Sprintf("... %d lines hidden before", truncatedBefore)))
+	} else if truncatedAfter > 0 {
+		b.WriteString("\n" + moreStyle.Render(fmt.Sprintf("... %d lines hidden after", truncatedAfter)))
 	}
 
 	return b.String()
