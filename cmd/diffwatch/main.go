@@ -14,6 +14,7 @@ import (
 func main() {
 	// Parse command line arguments
 	watchPath := flag.String("path", ".", "Path to watch for changes")
+	recursive := flag.Bool("recursive", false, "Watch all subdirectories recursively")
 	flag.Parse()
 
 	// Validate path
@@ -23,7 +24,7 @@ func main() {
 	}
 
 	// Create file watcher
-	fw, err := watcher.New(*watchPath)
+	fw, err := watcher.New(*watchPath, *recursive)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating watcher: %v\n", err)
 		os.Exit(1)

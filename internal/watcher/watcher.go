@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -24,10 +25,12 @@ type FileWatcher struct {
 	debouncer *Debouncer
 	mu        sync.RWMutex
 	closed    bool
+	recursive bool
+	watchPath string
 }
 
 // New creates a new FileWatcher for the given path
-func New(path string) (*FileWatcher, error) {
+func New(path string, recursive bool) (*FileWatcher, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("creating watcher: %w", err)
@@ -40,22 +43,55 @@ func New(path string) (*FileWatcher, error) {
 		return nil, fmt.Errorf("resolving path: %w", err)
 	}
 
-	if err := watcher.Add(absPath); err != nil {
-		watcher.Close()
-		return nil, fmt.Errorf("adding path to watcher: %w", err)
-	}
-
 	fw := &FileWatcher{
 		watcher:   watcher,
 		events:    make(chan Event, 100),
 		errors:    make(chan error, 10),
 		debouncer: NewDebouncer(100 * time.Millisecond),
+		recursive: recursive,
+		watchPath: absPath,
+	}
+
+	// Add paths to watch
+	if recursive {
+		if err := fw.addRecursive(absPath); err != nil {
+			watcher.Close()
+			return nil, err
+		}
+	} else {
+		if err := watcher.Add(absPath); err != nil {
+			watcher.Close()
+			return nil, fmt.Errorf("adding path to watcher: %w", err)
+		}
 	}
 
 	// Start watching in background
 	go fw.watch()
 
 	return fw, nil
+}
+
+// addRecursive adds a directory and all its subdirectories to the watcher
+func (fw *FileWatcher) addRecursive(root string) error {
+	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			// Skip directories/files with permission errors
+			if os.IsPermission(err) {
+				return filepath.SkipDir
+			}
+			return err
+		}
+		if info.IsDir() {
+			if err := fw.watcher.Add(path); err != nil {
+				// Skip if permission denied
+				if os.IsPermission(err) {
+					return filepath.SkipDir
+				}
+				return fmt.Errorf("adding path to watcher: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // Events returns the channel of debounced file events
@@ -106,6 +142,18 @@ func (fw *FileWatcher) watch() {
 // handleEvent processes a raw fsnotify event
 func (fw *FileWatcher) handleEvent(event fsnotify.Event) {
 	op := opToString(event.Op)
+
+	// If recursive mode and a directory was created, add it to the watcher
+	if fw.recursive && event.Op&fsnotify.Create == fsnotify.Create {
+		if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+			if err := fw.addRecursive(event.Name); err != nil {
+				// Only send error if it's not a permission error
+				if !os.IsPermission(err) {
+					fw.sendError(fmt.Errorf("adding new directory to watcher: %w", err))
+				}
+			}
+		}
+	}
 
 	ev := Event{
 		Path:      event.Name,
