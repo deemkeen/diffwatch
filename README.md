@@ -2,6 +2,8 @@
 
 A real-time CLI tool for watching file changes and visualizing diffs in your terminal.
 
+![DiffWatch Demo](demo.gif)
+
 ## Features
 
 - Real-time file watching with platform-native notifications
